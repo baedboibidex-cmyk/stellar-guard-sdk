@@ -75,7 +75,6 @@ fn does_not_flag_safe_fixture() {
     let findings = parse_findings(&output);
     assert!(findings.is_empty(), "expected no findings: {findings:#?}");
 }
-
 #[test]
 fn directory_scan_flags_only_the_vulnerable_fixture() {
     let output = run_scan(&fixtures_dir());
@@ -86,12 +85,16 @@ fn directory_scan_flags_only_the_vulnerable_fixture() {
     );
 
     let findings = parse_findings(&output);
+    let sg001: Vec<&Value> = findings
+        .iter()
+        .filter(|finding| finding["rule_id"] == "SG001")
+        .collect();
     assert_eq!(
-        findings.len(),
+        sg001.len(),
         1,
-        "expected exactly one finding: {findings:#?}"
+        "expected exactly one SG001 finding (other rules may also fire): {findings:#?}"
     );
-    assert!(findings[0]["file"]
+    assert!(sg001[0]["file"]
         .as_str()
         .unwrap()
         .ends_with("vulnerable.rs"));

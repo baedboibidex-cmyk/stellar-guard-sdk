@@ -6,11 +6,18 @@ mutations before mainnet deploy.
 
 ## Status
 
-v1 milestone: a working CLI that detects **SG001** — entry points
-(`#[contractimpl]` `pub fn`s) that mutate contract storage without a
-preceding `require_auth()` / `require_auth_for_args()` call. See
-[`rules/SG001.md`](rules/SG001.md) for the rule and [`LIMITATIONS.md`](LIMITATIONS.md)
-for known constraints.
+v1 milestone: a working CLI that detects
+
+- **SG001** — entry points (`#[contractimpl]` `pub fn`s) that mutate
+  contract storage without a preceding `require_auth()` /
+  `require_auth_for_args()` call.
+- **SG002** — entry points that mutate storage **after** an external
+  contract call (`env.invoke_contract` / `env.try_invoke_contract` or a
+  generated `...Client::new(...).method(...)` call), i.e. a reentrancy
+  ordering risk.
+
+See [`rules/SG001.md`](rules/SG001.md) and [`rules/SG002.md`](rules/SG002.md)
+for the rules and [`LIMITATIONS.md`](LIMITATIONS.md) for known constraints.
 
 ## Usage
 
@@ -49,6 +56,7 @@ cargo clippy  # lints
 ```
 crates/
   core/    # parsing + rule engine (syn, quote, serde, serde_json, walkdir)
+           #   rules/common.rs holds shared analysis primitives
   cli/     # `stellar-guard` binary
 fixtures/  # sample Soroban contracts used by the tests
 rules/     # one markdown file per rule

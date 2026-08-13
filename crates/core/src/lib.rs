@@ -1,10 +1,14 @@
 //! `stellar-guard-core` — parsing and rule engine for static security
 //! analysis of Soroban smart contracts.
 //!
-//! v1 ships a single rule, SG001: an entry point (`#[contractimpl]` `pub fn`)
-//! that mutates contract storage without first calling `require_auth()` /
-//! `require_auth_for_args()` on an `Address`. Detection is syntax-level and
-//! pattern-based; see [`rules::sg001`] and `LIMITATIONS.md`.
+//! v1 ships two rules:
+//! - SG001: an entry point (`#[contractimpl]` `pub fn`) that mutates contract
+//!   storage without first calling `require_auth()` / `require_auth_for_args()`.
+//! - SG002: an entry point that mutates storage after an external contract
+//!   call (reentrancy ordering).
+//!
+//! Detection is syntax-level and pattern-based; see [`rules::sg001`],
+//! [`rules::sg002`], and `LIMITATIONS.md`.
 
 pub mod finding;
 pub mod rules;
@@ -75,7 +79,9 @@ pub fn check_source(source: &str, file: &str) -> Result<Vec<Finding>, ScanError>
         file: file.to_string(),
         error,
     })?;
-    Ok(rules::sg001::run(&ast, file))
+    let mut findings = rules::sg001::run(&ast, file);
+    findings.extend(rules::sg002::run(&ast, file));
+    Ok(findings)
 }
 
 fn is_rs_file(path: &Path) -> bool {

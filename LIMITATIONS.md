@@ -1,10 +1,11 @@
 # Limitations
 
-`stellar-guard` v1 ships one rule — SG001 (storage mutation without
-authorization) — implemented as a **syntax-level, pattern-based** analysis
-over the parsed Rust AST (`syn`). It is deliberately **not** a control-flow
-or dataflow analysis. The following constraints are known and accepted for
-this milestone; addressing them requires a richer analysis engine.
+`stellar-guard` v1 ships two rules — SG001 (storage mutation without
+authorization) and SG002 (storage mutation after an external contract call)
+— implemented as a **syntax-level, pattern-based** analysis over the parsed
+Rust AST (`syn`). It is deliberately **not** a control-flow or dataflow
+analysis. The following constraints are known and accepted for this
+milestone; addressing them requires a richer analysis engine.
 
 ## SG001-specific limitations
 
@@ -44,10 +45,48 @@ this milestone; addressing them requires a richer analysis engine.
 10. **Parse errors abort the scan.** A file that `syn` cannot parse produces
     an error for the whole scan rather than partial results.
 
+## SG002-specific limitations
+
+1. **Statement-order / line-based, like SG001.** Branches, loops, and
+   conditionals are walked flat: an external call that only runs on some
+   paths is still treated as if it always runs, and the mutation that runs
+   after it on other paths is still flagged → **false positives**. The
+   converse (call and mutation that can never run in the same invocation)
+   is also not understood.
+2. **No dataflow analysis.** A cross-contract call performed through a
+   stored client variable is invisible: `let c = PoolClient::new(&env,
+   &pool); c.swap(&amount);` is **not** detected, and neither is
+   `client.try_swap(...)` on such a variable. Only the chained form
+   `PoolClient::new(&env, &pool).swap(...)` is recognized.
+3. **External calls in helper functions are invisible.** If the
+   `invoke_contract` call (or the storage mutation) happens in a function
+   the entry point calls, the entry point is not flagged (false negative).
+4. **`...Client::new(...)` is a heuristic.** Any method call whose receiver
+   chain is `SomethingClient::new(...)` is treated as an external call,
+   even if the type is not a generated contract client (false positive
+   possible). It is a best-effort approximation of the generated-client
+   pattern.
+5. **Env-level APIs matched by name.** `invoke_contract` and
+   `try_invoke_contract` are matched by method name on any receiver, not
+   verified to be `env`. The spec-assumed `invoke_contract_check_args` does
+   **not** exist in the current `soroban-sdk` and is not (and cannot be)
+   detected.
+6. **Ordering is by line number.** An external call must appear on a
+   strictly earlier line than the mutation to trigger the finding; same-line
+   ordering is not detected.
+7. **Only the two `Env` invocation APIs and the chained client pattern are
+   recognized.** Other cross-contract mechanisms (e.g. deferred calls or
+   `env.deployer()` flows) are out of scope for v1.
+8. **Only `pub fn` in `#[contractimpl]` impl blocks are entry points**, same
+   as SG001; private helpers and trait methods are not analyzed.
+9. **Nested closures / callbacks** inside the body are attributed to the
+   enclosing entry point (flat walk), matching limitation 1.
+10. **Parse errors abort the scan**, same as SG001.
+
 ## Engine-wide limitations (future milestones)
 
-- Only one rule is implemented (SG001). Reentrancy, gas usage, and other
-  rules are out of scope for v1.
+- Two rules are implemented (SG001, SG002). Gas usage and other rules are
+  out of scope for v1.
 - Findings are emitted as JSON only; no SARIF format or GitHub Action
   integration yet.
 - No configuration file or rule toggling.
