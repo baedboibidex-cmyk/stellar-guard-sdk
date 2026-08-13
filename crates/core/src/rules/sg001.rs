@@ -5,91 +5,34 @@
 //! preceding `require_auth()` / `require_auth_for_args()` call in the same
 //! function body.
 //!
-//! v1 detection is deliberately syntax-level and line-based: method calls are
+//! Detection is deliberately syntax-level and line-based: method calls are
 //! matched by name and receiver shape, with no control-flow or dataflow
 //! analysis. See `LIMITATIONS.md` for the known constraints.
 
-use syn::visit::Visit;
-
 use crate::finding::Finding;
+
+use super::common::{collect_body_events, entry_points};
 
 /// Stable identifier for this rule.
 pub const RULE_ID: &str = "SG001";
 /// Severity assigned to every SG001 finding.
 pub const SEVERITY: &str = "high";
 
-/// Method names that mutate state on `Persistent` / `Instance` / `Temporary`
-/// storage handles (verified against the `soroban-sdk` docs).
-const MUTATING_METHODS: &[&str] = &[
-    "set",
-    "put", // pre-`set` SDK naming for temporary storage
-    "remove",
-    "update",
-    "try_update",
-    "extend_ttl",
-    "extend_ttl_with_limits",
-];
-
-/// `Storage` accessors that select the storage kind.
-const STORAGE_ACCESSORS: &[&str] = &["persistent", "instance", "temporary"];
-
-/// Method names that perform authorization on an `Address`.
-const AUTH_METHODS: &[&str] = &["require_auth", "require_auth_for_args"];
-
 /// Runs the SG001 rule over a parsed file.
 pub fn run(ast: &syn::File, file: &str) -> Vec<Finding> {
-    let mut visitor = ContractImplVisitor {
-        file: file.to_string(),
-        findings: Vec::new(),
-    };
-    visitor.visit_file(ast);
-    visitor.findings
-}
-
-/// Collects `#[contractimpl]` impl blocks and checks their `pub fn` items.
-struct ContractImplVisitor {
-    file: String,
-    findings: Vec<Finding>,
-}
-
-impl Visit<'_> for ContractImplVisitor {
-    fn visit_item_impl(&mut self, node: &syn::ItemImpl) {
-        if has_contractimpl_attribute(node) {
-            for item in &node.items {
-                if let syn::ImplItem::Fn(method) = item {
-                    if is_public(&method.vis) {
-                        if let Some(finding) = check_entry_point(method, &self.file) {
-                            self.findings.push(finding);
-                        }
-                    }
-                }
-            }
-        }
-        syn::visit::visit_item_impl(self, node);
-    }
-}
-
-fn has_contractimpl_attribute(node: &syn::ItemImpl) -> bool {
-    node.attrs.iter().any(|attr| {
-        attr.path()
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "contractimpl")
-    })
-}
-
-fn is_public(vis: &syn::Visibility) -> bool {
-    matches!(vis, syn::Visibility::Public(_))
+    entry_points(ast)
+        .into_iter()
+        .filter_map(|method| check_entry_point(method, file))
+        .collect()
 }
 
 /// Analyzes one entry point; returns a finding if it mutates storage without
 /// a preceding auth call.
 fn check_entry_point(method: &syn::ImplItemFn, file: &str) -> Option<Finding> {
-    let mut analyzer = BodyAnalyzer::default();
-    analyzer.visit_block(&method.block);
+    let events = collect_body_events(&method.block);
 
-    for mutation in &analyzer.mutations {
-        let authorized = analyzer
+    for mutation in &events.mutations {
+        let authorized = events
             .auth_lines
             .iter()
             .any(|&auth_line| auth_line < mutation.line);
@@ -103,118 +46,12 @@ fn check_entry_point(method: &syn::ImplItemFn, file: &str) -> Option<Finding> {
                 function: function.clone(),
                 message: format!(
                     "Entry point '{function}' mutates {} storage without a preceding require_auth() call.",
-                    mutation.storage_kind.label()
+                    mutation.kind.label()
                 ),
             });
         }
     }
     None
-}
-
-/// Which storage kind a mutating call targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StorageKind {
-    Persistent,
-    Instance,
-    Temporary,
-    /// `env.storage()` without a recognized accessor.
-    Contract,
-}
-
-impl StorageKind {
-    fn label(self) -> &'static str {
-        match self {
-            StorageKind::Persistent => "persistent",
-            StorageKind::Instance => "instance",
-            StorageKind::Temporary => "temporary",
-            StorageKind::Contract => "contract",
-        }
-    }
-}
-
-/// A storage-mutating call found in a function body.
-#[derive(Debug, Clone, Copy)]
-struct Mutation {
-    line: usize,
-    storage_kind: StorageKind,
-}
-
-/// Collects auth calls and storage mutations across a function body by
-/// walking every method call expression, including nested ones.
-#[derive(Default)]
-struct BodyAnalyzer {
-    auth_lines: Vec<usize>,
-    mutations: Vec<Mutation>,
-}
-
-impl Visit<'_> for BodyAnalyzer {
-    fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
-        let method = node.method.to_string();
-
-        if AUTH_METHODS.contains(&method.as_str()) {
-            self.auth_lines.push(line_of(&node.method));
-        }
-        if let Some(storage_kind) = storage_kind_of(node) {
-            self.mutations.push(Mutation {
-                line: line_of(&node.method),
-                storage_kind,
-            });
-        }
-
-        syn::visit::visit_expr_method_call(self, node);
-    }
-}
-
-fn line_of(spanned: &impl syn::spanned::Spanned) -> usize {
-    spanned.span().start().line
-}
-
-/// Returns the storage kind targeted by `call` if it is a mutating method
-/// reached through an `env.storage()` chain, else `None`.
-fn storage_kind_of(call: &syn::ExprMethodCall) -> Option<StorageKind> {
-    let method = call.method.to_string();
-    if !MUTATING_METHODS.contains(&method.as_str()) {
-        return None;
-    }
-
-    // Expected receiver shapes:
-    //   env.storage().persistent()/instance()/temporary()   (common)
-    //   env.storage()                                       (no accessor)
-    let syn::Expr::MethodCall(accessor) = &*call.receiver else {
-        return None;
-    };
-
-    let accessor_name = accessor.method.to_string();
-    if !STORAGE_ACCESSORS.contains(&accessor_name.as_str()) {
-        // `env.storage().<mutating>(...)` directly — `Storage` exposes no
-        // mutating methods in the current SDK, but keep a conservative
-        // catch-all for robustness.
-        return if is_env_storage(&call.receiver) {
-            Some(StorageKind::Contract)
-        } else {
-            None
-        };
-    }
-    if !is_env_storage(&accessor.receiver) {
-        return None;
-    }
-
-    let kind = match accessor_name.as_str() {
-        "persistent" => StorageKind::Persistent,
-        "instance" => StorageKind::Instance,
-        _ => StorageKind::Temporary,
-    };
-    Some(kind)
-}
-
-/// True when `expr` is exactly `env.storage()`.
-fn is_env_storage(expr: &syn::Expr) -> bool {
-    matches!(
-        expr,
-        syn::Expr::MethodCall(call)
-            if call.method == "storage"
-                && matches!(&*call.receiver, syn::Expr::Path(path) if path.path.is_ident("env"))
-    )
 }
 
 #[cfg(test)]
