@@ -1,0 +1,68 @@
+name: 'Stellar Guard — Soroban Security Scan'
+description: >-
+  Runs stellar-guard static analysis over Soroban contract source and posts
+  the findings as a Markdown report comment on the pull request (creating a
+  new comment or updating a prior one on subsequent pushes). The check fails
+  when any high-severity finding exists, matching `stellar-guard scan`'s
+  exit-code behavior.
+author: 'baedboibidex-cmyk'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  path:
+    description: >-
+      File or directory to scan, relative to the repository root. Defaults to
+      the repository root.
+    required: false
+    default: '.'
+  github-token:
+    description: >-
+      Token used to post/update the PR report comment. Needs
+      `pull-requests: write` permission. Defaults to the automatically
+      provided GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build stellar-guard CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo build --release --manifest-path "${{ github.action_path }}/Cargo.toml"
+
+    - name: Scan Soroban contracts
+      shell: bash
+      run: |
+        set -uo pipefail
+        bin="${{ github.action_path }}/target/release/stellar-guard"
+        report="${{ runner.temp }}/stellar-guard-findings.json"
+        err_log="${{ runner.temp }}/stellar-guard-scan.err"
+
+        set +e
+        "$bin" scan "${{ inputs.path }}" > "$report" 2> "$err_log"
+        rc=$?
+        set -e
+
+        if [ "$rc" -eq 2 ]; then
+          echo "::error::stellar-guard scan failed to run"
+          if [ -s "$err_log" ]; then
+            sed 's/^/  /' "$err_log" >&2
+          fi
+          exit 2
+        fi
+
+        echo "::notice::stellar-guard scan completed (exit $rc); findings saved to $report"
+
+    - name: Post or update PR report comment
+      uses: actions/github-script@v7
+      env:
+        FINDINGS_PATH: ${{ runner.temp }}/stellar-guard-findings.json
+        SCANNED_PATH: ${{ inputs.path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script-path: ${{ github.action_path }}/action/report.js
