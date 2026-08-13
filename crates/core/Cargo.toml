@@ -1,0 +1,17 @@
+[package]
+name = "stellar-guard-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Static security analysis for Soroban smart contracts (parsing + rule engine)."
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+# Direct dep only to enable `span-locations`, which lets us resolve token
+# line/column numbers when parsing outside a proc-macro context.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+walkdir = "2"
