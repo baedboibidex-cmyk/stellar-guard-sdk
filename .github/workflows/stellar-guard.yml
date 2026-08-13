@@ -1,0 +1,32 @@
+# Dogfooding / reference workflow: runs the stellar-guard action on this
+# repository's own Rust sources.
+#
+# This repo contains no Soroban contracts of its own — the Soroban samples
+# live in fixtures/ and are deliberately NOT scanned here (they intentionally
+# trigger SG001/SG002 findings, which would fail every PR). Instead we scan
+# crates/, the tool's own Rust code, which contains no #[contractimpl]
+# entry points, so this workflow passes and reports "no issues found".
+#
+# External Soroban projects should copy examples/stellar-guard-scan.yml and
+# reference the action from a tag/branch, e.g.
+# `uses: baedboibidex-cmyk/stellar-guard-sdk@main`.
+
+name: stellar-guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # required to post/update the PR report comment
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run stellar-guard security scan
+        uses: ./
+        with:
+          path: crates

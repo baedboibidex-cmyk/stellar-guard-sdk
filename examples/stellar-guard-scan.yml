@@ -1,0 +1,42 @@
+# Example workflow: consuming stellar-guard-sdk from an external Soroban
+# project.
+#
+# Copy this file to .github/workflows/stellar-guard-scan.yml in your Soroban
+# contract repository and adjust `path` to point at your contract sources.
+# On every pull request the action will:
+#   1. build the stellar-guard CLI,
+#   2. run `stellar-guard scan <path>` against your sources,
+#   3. post (or update) a Markdown report comment on the PR,
+#   4. fail the check when any high-severity finding exists.
+#
+# Prerequisites:
+#   - The `pull-requests: write` permission (below) so the action can post
+#     the report comment.
+#   - A recent Rust toolchain on the runner (preinstalled on ubuntu-latest)
+#     to build the CLI.
+
+name: stellar-guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # required to post/update the PR report comment
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run stellar-guard security scan
+        uses: baedboibidex-cmyk/stellar-guard-sdk@main
+        with:
+          # Path to your Soroban contract sources (a file or a directory).
+          # Defaults to the repository root.
+          path: contracts
+
+          # The action uses the automatically provided GITHUB_TOKEN by
+          # default; only set github-token if you need a different token.
+          # github-token: ${{ secrets.MY_TOKEN }}

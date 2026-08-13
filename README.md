@@ -44,6 +44,57 @@ stellar-guard scan path/to/contract
 Exit codes: `0` = clean, `1` = high-severity findings present, `2` = usage
 error or scan failure.
 
+## Using the GitHub Action
+
+A [composite GitHub Action](action.yml) is included at the repo root. Point
+it at your Soroban contract sources on every pull request; it builds the
+CLI, runs `stellar-guard scan <path>`, posts a Markdown report as a PR
+comment, and **fails the check when any high-severity finding exists**
+(matching the CLI's exit-code behavior).
+
+- **Inputs**
+  - `path` — file or directory to scan, relative to the repository root
+    (default: `.`).
+  - `github-token` — token used to post the report comment; needs
+    `pull-requests: write` permission (default: the automatic `GITHUB_TOKEN`).
+- **Comments, not spam** — the report is posted as one comment containing a
+  `<!-- stellar-guard-report -->` marker; on subsequent pushes to the same
+  PR the existing comment is **updated** instead of creating duplicates.
+- **Result** — the job fails (red check) when findings with severity
+  `high` exist; otherwise it passes, posting a short "no issues found"
+  report so the outcome is visible on the PR.
+
+Consuming workflow (see [`examples/stellar-guard-scan.yml`](examples/stellar-guard-scan.yml)
+for the full version):
+
+```yaml
+name: stellar-guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write # required to post/update the PR report comment
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run stellar-guard security scan
+        uses: baedboibidex-cmyk/stellar-guard-sdk@main
+        with:
+          path: contracts # path to your Soroban contract sources
+```
+
+`examples/stellar-guard-scan.yml` shows the same setup as a copy-paste
+workflow for an external project. This repository's own dogfooding workflow
+([`.github/workflows/stellar-guard.yml`](.github/workflows/stellar-guard.yml))
+runs the action on the tool's own `crates/` sources; it intentionally does
+not scan `fixtures/` (those samples trigger findings by design).
+
 ## Development
 
 ```bash
