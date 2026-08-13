@@ -180,4 +180,39 @@ impl Router {{
             "#,
         );
     }
+
+    #[test]
+    fn flags_tracked_client_call_before_mutation() {
+        assert_flagged(&contract_with(
+            "pub fn swap(env: Env, pool: Address, amount: i128) -> i128 {
+                let client = PoolClient::new(&env, &pool);
+                let received = client.swap(&amount);
+                env.storage().persistent().set(&Symbol::new(&env, \"total\"), &received);
+                received
+            }",
+        ));
+    }
+
+    #[test]
+    fn does_not_flag_tracked_client_call_when_mutation_precedes() {
+        assert_clean(&contract_with(
+            "pub fn swap(env: Env, pool: Address, amount: i128) -> i128 {
+                env.storage().persistent().set(&Symbol::new(&env, \"total\"), &amount);
+                let client = PoolClient::new(&env, &pool);
+                client.swap(&amount)
+            }",
+        ));
+    }
+
+    #[test]
+    fn flags_module_qualified_client_call_before_mutation() {
+        assert_flagged(&contract_with(
+            "pub fn swap(env: Env, pool: Address, amount: i128) -> i128 {
+                let client = pool::Client::new(&env, &pool);
+                let received = client.swap(&amount);
+                env.storage().persistent().set(&Symbol::new(&env, \"total\"), &received);
+                received
+            }",
+        ));
+    }
 }

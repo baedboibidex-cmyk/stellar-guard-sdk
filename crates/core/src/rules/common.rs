@@ -4,6 +4,8 @@
 //! entry-point discovery, storage-mutation detection, external-call
 //! detection, and body walking are implemented once and reused by every rule.
 
+use std::collections::HashSet;
+
 use syn::visit::Visit;
 
 /// Method names that mutate state on `Persistent` / `Instance` / `Temporary`
@@ -124,9 +126,25 @@ pub fn collect_body_events(block: &syn::Block) -> BodyEvents {
 #[derive(Default)]
 struct BodyVisitor {
     events: BodyEvents,
+    /// Variable names bound to a generated-client constructor (`let c =
+    /// XxxClient::new(...)`). Method calls on these identifiers are treated as
+    /// external calls, same as `env.invoke_contract(...)`.
+    client_vars: HashSet<String>,
 }
 
 impl Visit<'_> for BodyVisitor {
+    fn visit_local(&mut self, node: &syn::Local) {
+        // Detect `let <var> = <module>::Client::new(&env, ...)` bindings.
+        if let Some(init) = &node.init {
+            if is_client_new_call(&init.expr) {
+                if let syn::Pat::Ident(pat_ident) = &node.pat {
+                    self.client_vars.insert(pat_ident.ident.to_string());
+                }
+            }
+        }
+        syn::visit::visit_local(self, node);
+    }
+
     fn visit_expr_method_call(&mut self, node: &syn::ExprMethodCall) {
         let method = node.method.to_string();
 
@@ -139,7 +157,10 @@ impl Visit<'_> for BodyVisitor {
                 kind,
             });
         }
-        if EXTERNAL_CALL_METHODS.contains(&method.as_str()) || is_client_call(node) {
+        if EXTERNAL_CALL_METHODS.contains(&method.as_str())
+            || is_client_call(node)
+            || is_tracked_client_call(node, &self.client_vars)
+        {
             self.events.external_call_lines.push(line_of(&node.method));
         }
 
@@ -204,8 +225,8 @@ pub fn is_env_storage(expr: &syn::Expr) -> bool {
 /// `contract_a::Client::new(&env, &addr).method(...)`. Generated contract
 /// clients are thin wrappers around `env.invoke_contract`, so the chained
 /// form counts as an external call. Calls through a stored client variable
-/// (`let c = XxxClient::new(...); c.method(...)`) are not detected — no
-/// dataflow analysis (see `LIMITATIONS.md`).
+/// (`let c = XxxClient::new(...); c.method(...)`) are detected separately
+/// via `is_tracked_client_call` (see `BodyVisitor::client_vars`).
 fn is_client_call(call: &syn::ExprMethodCall) -> bool {
     // `XxxClient::new(&env, &addr)` parses as an `Expr::Call` whose callee is
     // the path `XxxClient::new`, so the receiver of the outer method call is
@@ -229,4 +250,43 @@ fn is_client_call(call: &syn::ExprMethodCall) -> bool {
         .collect::<Vec<_>>()
         .join("::");
     parent.ends_with("Client")
+}
+
+/// True when `expr` is `XxxClient::new(...)` or `<mod>::Client::new(...)`.
+/// Used to detect `let c = XxxClient::new(...)` bindings so that subsequent
+/// `c.method(...)` calls are treated as external calls.
+fn is_client_new_call(expr: &syn::Expr) -> bool {
+    let syn::Expr::Call(ctor) = expr else {
+        return false;
+    };
+    let syn::Expr::Path(path) = &*ctor.func else {
+        return false;
+    };
+    let segments: Vec<&syn::PathSegment> = path.path.segments.iter().collect();
+    let Some((last, parent)) = segments.split_last() else {
+        return false;
+    };
+    if last.ident != "new" {
+        return false;
+    }
+    let parent = parent
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::");
+    parent.ends_with("Client")
+}
+
+/// True when `call` is `<tracked_var>.method(...)` where `tracked_var` is a
+/// variable known to hold a generated-client instance.
+fn is_tracked_client_call(call: &syn::ExprMethodCall, client_vars: &HashSet<String>) -> bool {
+    let syn::Expr::Path(path) = &*call.receiver else {
+        return false;
+    };
+    // The receiver must be a single-segment path (a bare identifier).
+    if path.path.segments.len() != 1 {
+        return false;
+    }
+    let ident = &path.path.segments[0].ident;
+    client_vars.contains(&ident.to_string())
 }

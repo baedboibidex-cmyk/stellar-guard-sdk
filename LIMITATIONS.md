@@ -53,11 +53,14 @@ milestone; addressing them requires a richer analysis engine.
    after it on other paths is still flagged → **false positives**. The
    converse (call and mutation that can never run in the same invocation)
    is also not understood.
-2. **No dataflow analysis.** A cross-contract call performed through a
-   stored client variable is invisible: `let c = PoolClient::new(&env,
-   &pool); c.swap(&amount);` is **not** detected, and neither is
-   `client.try_swap(...)` on such a variable. Only the chained form
-   `PoolClient::new(&env, &pool).swap(...)` is recognized.
+2. **Client-variable calls are detected by simple binding tracking.** A
+   `let c = PoolClient::new(&env, &pool);` binding is recognized, and
+   subsequent `c.swap(...)` calls on that same identifier are treated as
+   external calls. However, re-assignments, references, or field access on
+   the variable are **not** tracked — only the exact identifier bound in the
+   `let` statement. Similarly, `client.try_swap(...)` on a tracked variable
+   is detected, but passing the client to another function and calling it
+   there is not.
 3. **External calls in helper functions are invisible.** If the
    `invoke_contract` call (or the storage mutation) happens in a function
    the entry point calls, the entry point is not flagged (false negative).
